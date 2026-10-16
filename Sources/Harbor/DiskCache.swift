@@ -97,7 +97,7 @@ public actor DiskCache {
         guard Int64(data.count) <= budget else { throw CacheError.oversizedEntry }
         if let ttl, !ttl.isFinite || ttl <= 0 { throw CacheError.invalidConfiguration }
         let index = try db()
-        let old = try index.all().first { $0.key == key }
+        let old = try index.find(key)
         let name = UUID().uuidString
         let temporary = content.appendingPathComponent(name + ".tmp")
         let destination = content.appendingPathComponent(name + ".blob")
@@ -116,7 +116,7 @@ public actor DiskCache {
     public func get(_ key: String) throws -> Data? {
         try validate(key)
         let index = try db()
-        guard let entry = try index.all().first(where: { $0.key == key }) else { statistics.misses += 1; return nil }
+        guard let entry = try index.find(key) else { statistics.misses += 1; return nil }
         if let expires = entry.expires, expires <= now().timeIntervalSince1970 {
             try remove(key); statistics.misses += 1; return nil
         }
@@ -134,7 +134,7 @@ public actor DiskCache {
     }
     public func remove(_ key: String) throws {
         let index = try db()
-        guard let entry = try index.all().first(where: { $0.key == key }) else { return }
+        guard let entry = try index.find(key) else { return }
         try index.remove(key); touches[key] = nil
         // Index removal first. Failure leaves an orphan that startup recovery can collect.
         let file = content.appendingPathComponent(entry.file)
@@ -166,7 +166,7 @@ public actor DiskCache {
         var bytes: Int64 = 0
         for item in candidates {
             let index = try db()
-            guard let entry = try index.all().first(where: { $0.key == item.key }) else { continue }
+            guard let entry = try index.find(item.key) else { continue }
             try index.remove(entry.key); touches[entry.key] = nil
             do { try FileManager.default.removeItem(at: content.appendingPathComponent(entry.file)) }
             catch { failures.append(entry.file) }

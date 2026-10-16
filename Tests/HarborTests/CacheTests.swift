@@ -17,10 +17,9 @@ final class CacheTests: XCTestCase {
         do { _ = try await cache.get("a"); XCTFail("closed") } catch {}
     }
     func testLRUFlushesPendingTouchesBeforeEviction() async throws {
-        let clock = Clock(), cache = try DiskCache(directory: root, capacity: 4, now: { Date(timeIntervalSince1970: 100) })
+        let cache = try DiskCache(directory: root, capacity: 4, now: { Date(timeIntervalSince1970: 100) })
         try await cache.put(Data([1,1]), forKey: "a")
         try await cache.put(Data([2,2]), forKey: "b")
-        _ = clock // A separate test below covers clock advancement; tie break here is deterministic by key.
         let plan = try await cache.previewTrim(to: 2)
         XCTAssertEqual(plan.first?.key, "a")
         _ = try await cache.trim(to: 2)
@@ -76,5 +75,36 @@ final class CacheTests: XCTestCase {
         }
         let usage = try await cache.usage(); XCTAssertLessThanOrEqual(usage, 20)
         try await cache.close()
+    }
+    func testTrimRecomputesAStalePreview() async throws {
+        let clock = Clock()
+        let cache = try DiskCache(directory: root, capacity: 4, now: clock.now)
+        try await cache.put(Data([1,1]), forKey: "a")
+        clock.time += 1
+        try await cache.put(Data([2,2]), forKey: "b")
+        let oldPlan = try await cache.previewTrim(to: 2)
+        XCTAssertEqual(oldPlan.first?.key, "a")
+        clock.time += 1
+        _ = try await cache.get("a")
+        _ = try await cache.trim(to: 2)
+        let a = try await cache.get("a"), b = try await cache.get("b")
+        XCTAssertEqual(a, Data([1,1])); XCTAssertNil(b)
+        try await cache.close()
+    }
+    func testRecoveryRemovesMissingContentIndexButPreservesUnknownFiles() async throws {
+        let cache = try DiskCache(directory: root, capacity: 100)
+        try await cache.put(Data([1]), forKey: "a")
+        try await cache.close()
+        let content = root.appendingPathComponent("content")
+        for file in try FileManager.default.contentsOfDirectory(at: content, includingPropertiesForKeys: nil) where file.pathExtension == "blob" {
+            try FileManager.default.removeItem(at: file)
+        }
+        let unknown = content.appendingPathComponent("keep.txt")
+        try Data("unmanaged".utf8).write(to: unknown)
+        let reopened = try DiskCache(directory: root, capacity: 100)
+        let value = try await reopened.get("a"), stats = await reopened.statistics
+        XCTAssertNil(value); XCTAssertEqual(stats.recoveredEntries, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unknown.path))
+        try await reopened.close()
     }
 }

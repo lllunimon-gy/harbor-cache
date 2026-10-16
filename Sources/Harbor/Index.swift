@@ -53,6 +53,18 @@ final class Index {
         guard status == SQLITE_DONE else { throw CacheError.database("select failed") }
         return result
     }
+    func find(_ key: String) throws -> Entry? {
+        let s = try prepare("SELECT key,file,bytes,expires,accessed FROM entries WHERE key=?")
+        defer { sqlite3_finalize(s) }
+        bind(key, 1, s)
+        let status = sqlite3_step(s)
+        if status == SQLITE_DONE { return nil }
+        guard status == SQLITE_ROW else { throw CacheError.database("lookup failed") }
+        return Entry(key: String(cString: sqlite3_column_text(s, 0)),
+                     file: String(cString: sqlite3_column_text(s, 1)), bytes: sqlite3_column_int64(s, 2),
+                     expires: sqlite3_column_type(s, 3) == SQLITE_NULL ? nil : sqlite3_column_double(s, 3),
+                     accessed: sqlite3_column_double(s, 4))
+    }
     func upsert(_ entry: Entry) throws {
         let s = try prepare("INSERT INTO entries VALUES(?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET file=excluded.file,bytes=excluded.bytes,expires=excluded.expires,accessed=excluded.accessed")
         defer { sqlite3_finalize(s) }
